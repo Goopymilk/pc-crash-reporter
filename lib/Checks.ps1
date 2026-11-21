@@ -650,15 +650,16 @@ function Invoke-FreeSpaceCheck([object[]]$Volumes) {
         if ($v.SizeGB -le 0) { continue }
         $pct = 100 * $v.FreeGB / $v.SizeGB
         $isSys = $v.Drive -eq $sysDrive
-        if ($pct -ge 10 -and -not ($isSys -and $v.FreeGB -lt 15)) { continue }
-        $sev = if ($isSys -and ($pct -lt 5 -or $v.FreeGB -lt 10)) { 'critical' } elseif ($isSys) { 'warning' } else { 'info' }
+        # Only a drive with under 1% free is a real crash risk; anything above that is not reported.
+        if ($pct -ge 1) { continue }
+        $sev = if ($isSys) { 'critical' } else { 'warning' }
         $why = if ($isSys) { 'This is the Windows drive. When it is nearly full, Windows can''t grow the page file (so programs crash with "out of memory"), updates fail, crash information can''t be saved, and games stutter or crash while saving or downloading shaders.' }
                else { 'SSDs also get slower and wear faster when they are kept nearly full, and games installed here can fail to update or save.' }
         Add-Finding -Sev $sev -Title ('Drive {0} is almost full ({1:0.0} GB free, {2:0.0}%)' -f $v.Drive, $v.FreeGB, $pct) `
             -Plain ("Drive $($v.Drive)$(if ($v.Label) { " ($($v.Label))" }) has only {0:0.0} GB free out of {1:0} GB. $why" -f $v.FreeGB, $v.SizeGB) `
             -Steps @('Free up space: open Settings > System > Storage and run "Cleanup recommendations" (temporary files, old Windows update files, Recycle Bin).',
                      'Uninstall games and programs you no longer use (Settings > Apps > Installed apps, sort by size), or move games to another drive from Steam/Epic/etc.',
-                     'Aim to keep at least 15% (and at least 20 GB on the Windows drive) free.') -Key "DiskFull|$($v.Drive)" -Area 'Drives'
+                     'Aim to keep a few percent of the drive free so Windows and games have room to work.') -Key "DiskFull|$($v.Drive)" -Area 'Drives'
     }
 }
 # ------------------------------------------------------------------ 24. crash shortly after waking from sleep / Fast Startup

@@ -345,11 +345,15 @@ Test-That ('This PC: {0} page file finding(s)' -f $findings.Count) $true
 
 Write-Host "`n== 23. Drives almost full" -ForegroundColor Cyan
 Reset-Context; Invoke-FreeSpaceCheck @([pscustomobject]@{ Drive = 'C:'; Label = ''; SizeGB = 931; FreeGB = 34 })
-Test-That 'C: at 3.7% free is critical' ((Get-Finding 'Drive C: is almost full').Sev -eq 'critical')
+Test-That 'C: at 3.7% free is not reported' ($findings.Count -eq 0)
+Reset-Context; Invoke-FreeSpaceCheck @([pscustomobject]@{ Drive = 'C:'; Label = ''; SizeGB = 931; FreeGB = 5 })
+Test-That 'C: at 0.5% free is critical' ((Get-Finding 'Drive C: is almost full').Sev -eq 'critical')
 Reset-Context; Invoke-FreeSpaceCheck @([pscustomobject]@{ Drive = 'D:'; Label = 'Games'; SizeGB = 2000; FreeGB = 150 })
-Test-That 'D: at 7.5% free is info' ((Get-Finding 'Drive D:').Sev -eq 'info')
+Test-That 'D: at 7.5% free is not reported' ($findings.Count -eq 0)
+Reset-Context; Invoke-FreeSpaceCheck @([pscustomobject]@{ Drive = 'D:'; Label = 'Games'; SizeGB = 2000; FreeGB = 12 })
+Test-That 'D: at 0.6% free is a warning' ((Get-Finding 'Drive D:').Sev -eq 'warning')
 Reset-Context; Invoke-FreeSpaceCheck @([pscustomobject]@{ Drive = 'C:'; Label = ''; SizeGB = 120; FreeGB = 13 })
-Test-That 'Small C: with under 15 GB free is flagged even above 10%' (Test-Finding 'Drive C:')
+Test-That 'Small C: at 10.8% free is not reported' ($findings.Count -eq 0)
 Reset-Context; Invoke-FreeSpaceCheck @([pscustomobject]@{ Drive = 'C:'; Label = ''; SizeGB = 931; FreeGB = 300 })
 Test-That 'Plenty of space is fine' ($findings.Count -eq 0)
 Reset-Context; Invoke-FreeSpaceCheck (Get-VolumeSpace)
