@@ -11,7 +11,10 @@ A beginner-friendly crash detective for Windows. It keeps an eye on your PC in t
 - **Reads blue-screen crash dumps.** It explains the stop code (for example `VIDEO_TDR_FAILURE`) and names the driver that was most likely involved.
 - **Collects and explains Windows errors:** hardware (WHEA) errors, drive errors, graphics driver resets, program crashes, services failing and more. Each one comes with a plain-English explanation and a "what to do" list. Harmless noise (like DistributedCOM 10016) is filtered out.
 - **Tracks history,** so you can see patterns like "the same blue screen happened 3 times this month".
-- **Checks your setup,** for example mismatched RAM sticks, an old graphics driver, an old BIOS, drive health and SSD wear.
+- **Shows what changed recently:** Windows updates, driver installs and program installs from the 7 days before a crash, as a timeline. Anything from the last 3 days gets highlighted in the to-do list, along with how to undo it.
+- **Spots dead fans:** a fan that was spinning, then shows 0 RPM while its part is hot. Fans that never spin (nothing plugged in) and graphics cards that stop their fans when cool are ignored.
+- **Detects overclocks:** EXPO/XMP memory profiles, RAM running above or below the speed it's rated for, and CPUs going faster than their normal top speed. It knows the stock speeds of common Ryzen and Intel CPUs.
+- **Checks your setup,** for example mismatched RAM sticks, an old graphics driver, how old your BIOS is (with how to check for a newer one), drive health and SSD wear.
 
 ## Install (about 2 minutes)
 

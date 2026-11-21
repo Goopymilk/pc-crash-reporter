@@ -393,6 +393,48 @@ function Get-ModuleInfo([string]$Module) {
     return $null
 }
 
+# ------------------------------------------------------------------ CPU stock max boost clocks (MHz)
+# Order matters: more specific names first. Unknown CPUs are simply not judged.
+$script:CpuBoostKB = @(
+    @('Ryzen 9 9950X3D', 5700), @('Ryzen 9 9950X', 5700), @('Ryzen 9 9900X3D', 5500), @('Ryzen 9 9900X', 5600),
+    @('Ryzen 7 9800X3D', 5200), @('Ryzen 7 9700X', 5500), @('Ryzen 5 9600X', 5400), @('Ryzen 5 9600', 5200),
+    @('Ryzen 7 8700G', 5100), @('Ryzen 7 8700F', 5000), @('Ryzen 5 8600G', 5000), @('Ryzen 5 8500G', 5000), @('Ryzen 5 8400F', 4700),
+    @('Ryzen 9 7950X3D', 5700), @('Ryzen 9 7950X', 5700), @('Ryzen 9 7900X3D', 5600), @('Ryzen 9 7900X', 5600), @('Ryzen 9 7900', 5400),
+    @('Ryzen 7 7800X3D', 5000), @('Ryzen 7 7700X', 5400), @('Ryzen 7 7700', 5300), @('Ryzen 5 7600X', 5300), @('Ryzen 5 7600', 5100), @('Ryzen 5 7500F', 5000),
+    @('Ryzen 9 5950X', 4900), @('Ryzen 9 5900X', 4800), @('Ryzen 7 5800X3D', 4500), @('Ryzen 7 5800X', 4700), @('Ryzen 7 5700X3D', 4100),
+    @('Ryzen 7 5700X', 4600), @('Ryzen 7 5700G', 4600), @('Ryzen 5 5600X', 4600), @('Ryzen 5 5600G', 4400), @('Ryzen 5 5600', 4400), @('Ryzen 5 5500', 4200),
+    @('Ryzen 9 3900X', 4600), @('Ryzen 7 3700X', 4400), @('Ryzen 5 3600X', 4400), @('Ryzen 5 3600', 4200),
+    @('Ultra 9 285K', 5700), @('Ultra 7 265K', 5500), @('Ultra 5 245K', 5200),
+    @('i9-14900KS', 6200), @('i9-14900K', 6000), @('i7-14700K', 5600), @('i5-14600K', 5300), @('i5-14400', 4700),
+    @('i9-13900KS', 6000), @('i9-13900K', 5800), @('i7-13700K', 5400), @('i5-13600K', 5100), @('i5-13400', 4600),
+    @('i9-12900K', 5200), @('i7-12700K', 5000), @('i5-12600K', 4900), @('i5-12400', 4400), @('i3-12100', 4300)
+)
+
+function Get-CpuMaxBoost([string]$CpuName) {
+    if (-not $CpuName) { return $null }
+    foreach ($e in $script:CpuBoostKB) {
+        # "i5-12600K" also matches "i5-12600KF"; "Ryzen 5 7600" must not match "Ryzen 5 7600X"
+        $pat = [regex]::Escape($e[0])
+        if ($e[0] -match '^i\d-|^Ultra') { $pat += 'F?(?![\w])' } else { $pat += '(?![\w])' }
+        if ($CpuName -match $pat) { return [pscustomobject]@{ Model = $e[0]; Mhz = [int]$e[1] } }
+    }
+    return $null
+}
+
+function Get-RamRatedSpeed([string]$PartNumber) {
+    # Reads the rated (EXPO/XMP) speed from common RAM part numbers. Returns MT/s or $null.
+    $pn = ([string]$PartNumber).Trim().ToUpperInvariant()
+    if (-not $pn) { return $null }
+    if ($pn -match '^KF([45])(\d{2})C') { return [int]$matches[2] * 100 }          # Kingston FURY: KF556C40 = DDR5-5600
+    if ($pn -match '^KVR(\d{2})') { return [int]$matches[1] * 100 }                 # Kingston ValueRAM: KVR32 = 3200
+    if ($pn -match '^(CT|CP)\w*?G(\d{2})C\d{2}') { return [int]$matches[2] * 100 }  # Crucial: CT16G48C40U5 = 4800
+    foreach ($m in [regex]::Matches($pn, '(?<!\d)(\d{4})(?!\d)')) {                 # G.Skill F5-6000..., Corsair ...B6000C36, Team UD5-5600
+        $v = [int]$m.Groups[1].Value
+        if ($v -ge 1600 -and $v -le 9600 -and ($v % 100 -eq 0 -or $v % 100 -eq 66 -or $v % 100 -eq 33)) { return $v }
+    }
+    return $null
+}
+
 $script:Glossary = [ordered]@{
     'Blue screen (BSOD)' = 'When Windows hits an error it cannot safely recover from, it stops everything, shows a blue (or black) screen with a "stop code", saves a crash dump file, and restarts.'
     'Stop code / bug check' = 'The name of the error on a blue screen, like VIDEO_TDR_FAILURE. It tells you what kind of problem happened, not always which part caused it.'
@@ -406,4 +448,7 @@ $script:Glossary = [ordered]@{
     'Hot spot' = 'The hottest point on the graphics chip. It is always higher than the normal GPU temperature.'
     'Tctl/Tdie' = 'The main AMD Ryzen CPU temperature sensor.'
     'BIOS / UEFI' = 'Your motherboard''s built-in settings screen (press Del or F2 while the PC starts).'
+    'PBO / Curve Optimizer' = 'AMD Ryzen settings in the BIOS that let the CPU run faster (PBO) or with less voltage (Curve Optimizer). They can boost performance but are a common cause of crashes if pushed too far.'
+    'MT/s' = 'Mega-transfers per second, the speed rating of RAM. DDR5-6000 means 6000 MT/s.'
+    'Zero-RPM mode' = 'Many graphics cards and some fans stop completely when cool, to stay silent. A fan reading 0 RPM while the part is cool is normal.'
 }

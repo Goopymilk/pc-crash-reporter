@@ -56,7 +56,7 @@ function Test-KeepSensor([string]$Type, [string]$Name, [string]$HwType) {
         'Load'        { return ($Name -match '^(CPU Total|GPU Core|GPU Memory Controller|Memory|Virtual Memory|GPU Video Engine|D3D 3D)$') }
         'Data'        { return ($Name -match '^(Memory Used|Memory Available)$') }
         'SmallData'   { return ($Name -match '^(GPU Memory Used|GPU Memory Total)$') }
-        'Clock'       { return ($Name -match '^(GPU Core|GPU Memory|Cores \(Average\)|Core \(Average\))$') }
+        'Clock'       { return ($Name -match '^(GPU Core|GPU Memory|Cores \(Average\)|Core \(Average\)|Cores \(Max\))$') }
         'Level'       { return ($HwType -eq 'Storage' -or $HwType -eq 'Battery') }
         default       { return $false }
     }
@@ -66,6 +66,17 @@ function Add-HardwareReadings($Hw, $Out) {
     try { $Hw.Update() } catch { }
     foreach ($sub in $Hw.SubHardware) { Add-HardwareReadings $sub $Out }
     $hwType = [string]$Hw.HardwareType
+    # Highest single-core clock, used to spot CPU overclocks (only the average is logged otherwise)
+    if ($hwType -eq 'Cpu') {
+        $coreMax = $null
+        foreach ($s in $Hw.Sensors) {
+            if ([string]$s.SensorType -eq 'Clock' -and $s.Name -match 'Core #\d+$' -and $null -ne $s.Value) {
+                $cv = [double]$s.Value
+                if ($cv -gt 0 -and $cv -lt 10000 -and ($null -eq $coreMax -or $cv -gt $coreMax)) { $coreMax = $cv }
+            }
+        }
+        if ($null -ne $coreMax) { $Out[('Cpu~{0}|Clock|Cores (Max)' -f ($Hw.Name -replace '[",|~]', ' '))] = [math]::Round($coreMax) }
+    }
     foreach ($s in $Hw.Sensors) {
         $v = $s.Value
         if ($null -eq $v) { continue }

@@ -471,9 +471,21 @@ try {
     $bb = Get-CimInstance Win32_BaseBoard; $bios = Get-CimInstance Win32_BIOS
     $sys['Motherboard'] = "$($bb.Manufacturer) $($bb.Product)"
     $biosDate = $bios.ReleaseDate
-    $sys['BIOS'] = "$($bios.SMBIOSBIOSVersion)" + $(if ($biosDate) { ' ({0:yyyy-MM-dd})' -f $biosDate } else { '' })
-    if ($biosDate -and ($now - $biosDate).TotalDays -gt 730 -and $kind -in 'bsod', 'powerloss') {
-        Add-Finding -Sev 'info' -Title ('Your BIOS is over 2 years old ({0:yyyy})' -f $biosDate) -Plain 'Newer BIOS versions often fix stability, memory compatibility and CPU problems.' -Steps @('Bios') -Key 'BiosOld' -Area 'System'
+    $biosVer = "$($bios.SMBIOSBIOSVersion)".Trim()
+    $sys['BIOS'] = $biosVer
+    if ($biosDate) {
+        $ageDays = ($now - $biosDate).TotalDays
+        $ageTxt = if ($ageDays -ge 730) { '{0:0} years' -f [math]::Floor($ageDays / 365) } elseif ($ageDays -ge 365) { 'over a year' } else { '{0:0} months' -f [math]::Max(1, [math]::Floor($ageDays / 30.4)) }
+        $sys['BIOS'] = '{0} (released {1:MMMM yyyy}, {2} ago)' -f $biosVer, $biosDate, $ageTxt
+        if ($ageDays -gt 365) {
+            $board = "$($bb.Manufacturer) $($bb.Product)".Trim()
+            $sev = 'info'; if ($kind -in 'bsod', 'powerloss', 'sleepfail') { $sev = 'warning' }
+            Add-Finding -Sev $sev -Title ('Your BIOS is {0} old (version {1}, {2:MMMM yyyy})' -f $ageTxt, $biosVer, $biosDate) `
+                -Plain 'Motherboard makers regularly release BIOS updates that fix crashes, improve RAM compatibility (especially EXPO/XMP and mixed sticks) and improve CPU support. A newer version is probably available for your board.' `
+                -Steps @("Check for a newer BIOS: search the web for ""$board BIOS"" and open the support page on the maker's own website. Compare the newest version there with yours ($biosVer).",
+                         'Bios',
+                         'Before updating, read the maker''s instructions. Use a USB stick, and never turn the PC off during the update.') -Key 'BiosOld' -Area 'System'
+        }
     }
 } catch { }
 $ramNote = $null
@@ -483,9 +495,30 @@ try {
     $sizes = ($mods | ForEach-Object { '{0} GB' -f [math]::Round($_.Capacity / 1GB) }) -join ' + '
     $type = switch ([int]$mods[0].SMBIOSMemoryType) { 34 { 'DDR5' } 26 { 'DDR4' } 24 { 'DDR3' } default { 'RAM' } }
     $cfgSpeed = [int]$mods[0].ConfiguredClockSpeed
+    $stdMax = switch ($type) { 'DDR5' { 5600 } 'DDR4' { 3200 } 'DDR3' { 1600 } default { 0 } }
+    $ratedList = @($mods | ForEach-Object { Get-RamRatedSpeed $_.PartNumber } | Where-Object { $_ })
+    $rated = $null; if ($ratedList.Count -eq $mods.Count) { $rated = ($ratedList | Measure-Object -Minimum).Minimum }
+    $xmp = $stdMax -gt 0 -and $cfgSpeed -gt $stdMax
     $sys['Memory'] = "$totalGB GB $type ($sizes) running at $cfgSpeed MT/s"
-    $xmp = ($type -eq 'DDR5' -and $cfgSpeed -gt 5600) -or ($type -eq 'DDR4' -and $cfgSpeed -gt 3200)
-    if ($xmp) { $sys['Memory'] += ' - EXPO/XMP looks ON' }
+    if ($rated) { $sys['Memory'] += " - rated for $rated MT/s" }
+    $sys['Memory'] += $(if ($xmp) { ' - EXPO/XMP is ON' } else { ' - EXPO/XMP is off' })
+    if ($xmp) {
+        $sev = 'info'; if ($kind -in 'bsod', 'powerloss', 'sleepfail', 'powerbutton') { $sev = 'warning' }
+        Add-Finding -Sev $sev -Title "Memory overclock (EXPO/XMP) is on ($cfgSpeed MT/s)" `
+            -Plain "Your RAM runs at $cfgSpeed MT/s. The standard $type speed is up to $stdMax, so a memory overclock profile (EXPO on AMD, XMP on Intel) is turned on in the BIOS. This is normal for gaming PCs and is usually fine. But it is also the most common cause of random blue screens, so if you ever get crashes, turning it off is the first test." `
+            -Steps @('RamXmp', 'RamTest') -Key 'RamXmpOn' -Area 'Memory'
+    }
+    if ($rated -and $cfgSpeed -gt $rated + 50) {
+        Add-Finding -Sev 'warning' -Title "RAM runs faster than it is rated for ($cfgSpeed vs $rated MT/s)" `
+            -Plain "Your RAM sticks are rated for $rated MT/s, but they are running at $cfgSpeed MT/s. That is a manual memory overclock beyond what the sticks are sold for, and it can cause crashes and file corruption." `
+            -Steps @("Set the RAM back to its rated speed ($rated) in the BIOS, or load the EXPO/XMP profile instead of manual settings.", 'RamTest') -Key 'RamBeyondRated' -Area 'Memory'
+    } elseif ($rated -and $cfgSpeed -lt $rated - 100) {
+        $mixNote = ''
+        if (@($ratedList | Select-Object -Unique).Count -gt 1) { $mixNote = ' Your sticks have different ratings, so the slower one would set the limit anyway.' }
+        Add-Finding -Sev 'info' -Title "Your RAM could run faster ($cfgSpeed of $rated MT/s)" `
+            -Plain "Your RAM is rated for $rated MT/s but is running at $cfgSpeed MT/s, because EXPO/XMP is off. This is the most stable setting, so there is nothing wrong. Turning EXPO/XMP on in the BIOS would make some games a few percent faster.$mixNote If your sticks don't match, leaving it off is the safer choice." `
+            -Steps @() -Key 'RamBelowRated' -Area 'Memory'
+    }
     $distinct = @($mods | ForEach-Object { "$($_.Capacity)|$($_.Speed)|$($_.PartNumber)".Trim() } | Select-Object -Unique)
     if ($mods.Count -gt 1 -and $distinct.Count -gt 1) {
         $sev = 'info'; if ($kind -in 'bsod', 'powerloss') { $sev = 'warning' }
@@ -503,6 +536,125 @@ if ($hasSensors -and (-not $SensorKey.CpuTemp -or $cpuTempRough)) {
         -Plain 'The monitor cannot read your CPU temperature and power yet. This needs the free PawnIO driver.' `
         -Steps @('Run Install.cmd again and say yes when it offers to install PawnIO, then restart.') -Key 'NoCpuTemp' -Area 'Setup'
 }
+
+# ------------------------------------------------------------------ fans that stopped while hot
+function Get-TimeMap([string]$Key) {
+    $map = @{}
+    if ($Key -and $series.ContainsKey($Key)) { $s = $series[$Key]; for ($i = 0; $i -lt $s.V.Count; $i++) { $map[$s.T[$i]] = $s.V[$i] } }
+    return $map
+}
+$fanRows = @()
+if ($hasSensors) {
+    $cpuMap = Get-TimeMap $SensorKey.CpuTemp
+    $gpuMap = Get-TimeMap $SensorKey.GpuTemp
+    foreach ($fk in @($series.Keys | Where-Object { ($_ -split '\|')[1] -eq 'Fan' } | Sort-Object)) {
+        $fs = $series[$fk]; if ($fs.V.Count -lt 3) { continue }
+        $fmax = ($fs.V | Measure-Object -Maximum).Maximum
+        if ($fmax -lt 200) { continue }   # never spun: nothing plugged in, or a fan that stays off on purpose
+        $p = $fk -split '\|'; $hwType = ($p[0] -split '~')[0]; $hwName = ($p[0] -split '~', 2)[-1]
+        $isGpuFan = $hwType -like 'Gpu*'
+        $fanName = if ($isGpuFan) { "graphics card fan ($($p[2]))" } else { "$($p[2]) (motherboard header)" }
+        if ($isGpuFan) { $tmap = $gpuMap; $part = 'the graphics card'; $hot = 70; $warnT = $Th.GpuTempWarn }
+        elseif ($p[2] -match 'CPU|Pump|AIO|OPT') { $tmap = $cpuMap; $part = 'the CPU'; $hot = 70; $warnT = $Th.CpuTempWarn }
+        else { $tmap = $cpuMap; $part = 'the CPU'; $hot = 80; $warnT = $Th.CpuTempWarn }
+        $st = Get-Stats $fk
+        $fanRows += [pscustomobject]@{ Name = $fanName; Stat = $st }
+        if ($tmap.Count -eq 0) { continue }
+        $spun = $false; $hits = @()
+        for ($i = 0; $i -lt $fs.V.Count; $i++) {
+            $v = $fs.V[$i]
+            if ($v -ge 200) { $spun = $true; continue }
+            if ($spun -and $v -lt 50 -and $tmap.ContainsKey($fs.T[$i]) -and $tmap[$fs.T[$i]] -ge $hot) { $hits += [pscustomobject]@{ T = $fs.T[$i]; Temp = $tmap[$fs.T[$i]] } }
+        }
+        if ($hits.Count -ge 2) {
+            $peakT = ($hits | Measure-Object Temp -Maximum).Maximum
+            $sev = 'warning'; if ($peakT -ge $warnT) { $sev = 'critical' }
+            Add-Finding -Sev $sev -Title "A fan stopped while $part was hot: $fanName" `
+                -Plain ("The {0} had been spinning, then read 0 RPM while {1} was at {2:0} C (first at {3:HH:mm}, {4} readings in total). A fan that stops under load usually means it has failed, its cable came loose, or something is blocking it. That makes parts overheat, which can cause slowdowns and sudden shutdowns." -f $fanName, $part, $peakT, $hits[0].T, $hits.Count) `
+                -Steps @('With the side panel off and the PC running, check that this fan actually spins. Use a flashlight - do not touch the blades.',
+                         'Check that the fan cable is pushed firmly into the motherboard (or graphics card) and that no cable is touching the blades.',
+                         'In the BIOS fan settings, make sure this fan is not set to stop (0%) at high temperatures.',
+                         'If the fan does not spin, replace it. Case and CPU fans are cheap; graphics card fans can be bought as replacement parts or repaired under warranty.') `
+                -Key "FanStopped|$($p[0])|$($p[2])" -Area 'Cooling'
+        }
+    }
+}
+
+# ------------------------------------------------------------------ CPU overclock check
+$cpuBoost = Get-CpuMaxBoost $sys['Processor']
+$clkKey = Find-SensorKey '^Cpu~' 'Clock' @('Cores (Max)', 'Cores (Average)')
+if ($clkKey) {
+    $clk = $series[$clkKey]
+    $peakClk = ($clk.V | Measure-Object -Maximum).Maximum
+    if ($cpuBoost) {
+        $sys['Processor'] += (' - normal top speed {0} MHz, highest seen {1:0} MHz' -f $cpuBoost.Mhz, $peakClk)
+        $limit = $cpuBoost.Mhz + 100
+        $over = @($clk.V | Where-Object { $_ -gt $limit }).Count
+        if ($over -ge 3) {
+            $sev = 'info'; if ($kind -in 'bsod', 'powerloss', 'sleepfail', 'powerbutton') { $sev = 'warning' }
+            Add-Finding -Sev $sev -Title ('Your CPU runs faster than stock ({0:0} MHz vs {1} MHz)' -f $peakClk, $cpuBoost.Mhz) `
+                -Plain ("Your {0} normally tops out at {1} MHz, but it reached {2:0} MHz ({3} readings above stock). That means a CPU overclock is on - on AMD usually PBO with a boost override, on Intel a raised multiplier. Overclocks can seem stable for weeks and still cause occasional crashes. (Undervolts such as Curve Optimizer can't be detected, but they cause the same kind of crashes.)" -f $cpuBoost.Model, $cpuBoost.Mhz, $peakClk, $over) `
+                -Steps @('CpuOc') -Key 'CpuOverclock' -Area 'CPU'
+        }
+    } else {
+        $sys['Processor'] += (' - highest speed seen {0:0} MHz' -f $peakClk)
+    }
+}
+
+# ------------------------------------------------------------------ recent changes (updates, drivers, programs)
+$chEnd = $endTime; if ($CurrentSession) { $chEnd = $now }
+$chStart = $chEnd.AddDays(-7)
+$changes = New-Object System.Collections.Generic.List[object]
+$storeUpdates = 0
+try {
+    foreach ($e in @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WindowsUpdateClient'; Id = 19; StartTime = $chStart; EndTime = $chEnd } -ErrorAction SilentlyContinue)) {
+        $title = (Get-EventDataMap $e)['updateTitle']
+        if (-not $title) { continue }
+        if ($title -match '^[0-9A-Z]{12}-') { $storeUpdates++; continue }   # Microsoft Store app updates - routine
+        $kindTxt = 'Windows update'
+        if ($title -match 'Driver|Display|Graphics|Audio|Network|Firmware|System -|Extension') { $kindTxt = 'Driver (Windows Update)' }
+        $changes.Add([pscustomobject]@{ Time = $e.TimeCreated; Type = $kindTxt; Name = $title; Detail = '' })
+    }
+} catch { }
+try {
+    $pnpNames = @{}
+    $drv = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Kernel-PnP/Configuration'; Id = 400; StartTime = $chStart; EndTime = $chEnd } -ErrorAction SilentlyContinue)
+    foreach ($g in ($drv | ForEach-Object { $m = Get-EventDataMap $_; if ($m['DeviceUpdated'] -eq 'true' -and $m['DriverInbox'] -eq 'false') { [pscustomobject]@{ E = $_; M = $m } } } | Group-Object { "$($_.M['DriverPackageId'])|$($_.M['DriverVersion'])" })) {
+        $first = $g.Group | Sort-Object { $_.E.TimeCreated } | Select-Object -First 1
+        $m = $first.M
+        $id = $m['DeviceInstanceId']
+        $dev = $null
+        try { $dev = (Get-PnpDevice -InstanceId $id -ErrorAction Stop).FriendlyName } catch { }
+        if (-not $dev) { $dev = ($m['DriverPackageId'] -replace '\.inf_.*$', '') }
+        $extra = ''; if ($g.Count -gt 1) { $extra = " (+$($g.Count - 1) more devices)" }
+        $changes.Add([pscustomobject]@{ Time = $first.E.TimeCreated; Type = 'Driver installed/updated'; Name = "$dev$extra"
+            Detail = "version $($m['DriverVersion']) by $($m['DriverProvider'])" })
+    }
+} catch { }
+$msiNames = @{}
+try {
+    foreach ($e in @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'MsiInstaller'; Id = 1033, 1034; StartTime = $chStart; EndTime = $chEnd } -ErrorAction SilentlyContinue)) {
+        if ($e.Message -match 'Product Name:\s*(.+?)\.\s*Product Version:\s*([^\s]+?)\.\s') {
+            $n = $matches[1].Trim(); $ver = $matches[2]
+            $msiNames[$n] = $true
+            $changes.Add([pscustomobject]@{ Time = $e.TimeCreated; Type = $(if ($e.Id -eq 1033) { 'Program installed' } else { 'Program removed' }); Name = $n; Detail = "version $ver" })
+        }
+    }
+} catch { }
+try {
+    $roots = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    $seenApp = @{}
+    foreach ($a in (Get-ItemProperty $roots -ErrorAction SilentlyContinue)) {
+        if (-not $a.DisplayName -or -not $a.InstallDate -or $a.SystemComponent -eq 1 -or $a.ParentKeyName) { continue }
+        $d = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact([string]$a.InstallDate, 'yyyyMMdd', $inv, [Globalization.DateTimeStyles]::None, [ref]$d)) { continue }
+        if ($d -lt $chStart.Date -or $d -gt $chEnd) { continue }
+        if ($msiNames.ContainsKey($a.DisplayName) -or $seenApp.ContainsKey($a.DisplayName)) { continue }
+        $seenApp[$a.DisplayName] = $true
+        $changes.Add([pscustomobject]@{ Time = $d; Type = 'Program installed/updated'; Name = $a.DisplayName; Detail = $(if ($a.DisplayVersion) { "version $($a.DisplayVersion)" } else { '' }); DateOnly = $true })
+    }
+} catch { }
+$changes = @($changes | Sort-Object Time -Descending)
 
 # ------------------------------------------------------------------ crash details
 $crash = $null
@@ -630,6 +782,15 @@ if ($gap -and $gap.TotalSeconds -ge 0 -and $gap.TotalMinutes -lt 30) {
 if ($nCrit -gt 0) { $verdict = 'bad' } elseif ($nWarn -gt 0 -and $verdict -eq 'good') { $verdict = 'warn' }
 if ($kind -eq 'clean' -and $verdict -ne 'good') { $headline = 'Your PC shut down normally, but some problems were found' }
 
+if ($endedAtCrash) {
+    $prio = @{ 'Driver installed/updated' = 0; 'Driver (Windows Update)' = 0; 'Windows update' = 1 }
+    $recentCh = @($changes | Where-Object { $_.Time -ge $endTime.AddDays(-3).Date -and $_.Type -ne 'Program removed' } |
+        Sort-Object @{ e = { if ($prio.ContainsKey($_.Type)) { $prio[$_.Type] } else { 2 } } }, @{ e = { $_.Time }; Descending = $true } | Select-Object -First 3)
+    if ($recentCh.Count) {
+        $list = ($recentCh | ForEach-Object { '{0} ({1}, {2:MMM d})' -f $_.Name, $_.Type.ToLower(), $_.Time }) -join '; '
+        $start.Insert([math]::Min(1, $start.Count), "Things changed in the 3 days before this happened: $list. If your crashes only started after one of these, undo it as a test. For a driver: Device Manager -> right-click the device -> Properties -> Driver -> Roll Back Driver. For a Windows update: Settings -> Windows Update -> Update history -> Uninstall updates. For a program: uninstall it. See ""What changed recently"" below.")
+    }
+}
 foreach ($f in $sorted | Where-Object { $_.Sev -ne 'info' }) { foreach ($s in (Resolve-Steps $f.Steps)) { $start.Add($s) } }
 if ($prevBad.Count -ge 1 -and $endedAtCrash) {
     $codes = @($prevBad | Where-Object { $_.StopCode } | Group-Object StopCode | Sort-Object Count -Descending)
@@ -842,8 +1003,26 @@ if ($hasSensors -and $endedAtCrash) {
     A '</section>'
 }
 
+# recent changes
+$chLabel = if ($CurrentSession) { 'the last 7 days' } else { 'the 7 days before the session ended' }
+A "<h2>What changed recently</h2><section class=""card""><p>Updates, drivers and programs installed in $chLabel. Problems that start right after a change are very often caused by it.</p>"
+if ($changes.Count -eq 0) {
+    A '<p class="ok">&#10004; Nothing was installed or updated in that time.</p>'
+} else {
+    A '<div class="tablewrap"><table><tr><th>When</th><th>What</th><th>Name</th><th>Details</th></tr>'
+    foreach ($c in ($changes | Select-Object -First 40)) {
+        $when = if ($c.DateOnly) { $c.Time.ToString('ddd MMM d') } else { $c.Time.ToString('ddd MMM d, HH:mm') }
+        $cls = 'info'; if ($c.Type -like 'Driver*') { $cls = 'warn' }
+        A "<tr><td style=""white-space:nowrap"">$(Esc $when)</td><td><span class=""badge $cls"">$(Esc $c.Type)</span></td><td>$(Esc $c.Name)</td><td class=""meta"">$(Esc $c.Detail)</td></tr>"
+    }
+    A '</table></div>'
+    if ($changes.Count -gt 40) { A "<p class=""meta"">Showing the newest 40 of $($changes.Count) changes.</p>" }
+}
+if ($storeUpdates -gt 0) { A "<p class=""meta"">Plus $storeUpdates routine Microsoft Store app updates (not listed).</p>" }
+A '<p class="meta">Programs that don''t use the standard Windows installer only show the date, not the time.</p></section>'
+
 # findings
-$main = @($sorted | Where-Object { $_.Area -ne 'Other' })
+$main =@($sorted | Where-Object { $_.Area -ne 'Other' })
 $other = @($sorted | Where-Object { $_.Area -eq 'Other' })
 A "<h2>Problems found during the session ($($main.Count))</h2>"
 if ($main.Count -eq 0) { A '<section class="card"><p class="ok">&#10004; No known problems were logged by Windows.</p></section>' }
@@ -901,6 +1080,11 @@ if (-not $hasSensors) {
             if ($st.Max -ge $Th.DriveTempCrit) { $status = Get-SevBadge 'critical' } elseif ($st.Max -ge $Th.DriveTempWarn) { $status = Get-SevBadge 'warning' }
             A ('<tr><td>Drive: {0}</td><td class="num">{1:0.#} C</td><td class="num">{2:0.#} C</td><td>{3}</td><td>{4}</td></tr>' -f (Esc ($hw -replace '^Storage~', '')), $st.Avg, $st.Max, (Esc $st.MaxAt.ToString('ddd HH:mm:ss')), $status)
         }
+    }
+    foreach ($fr in $fanRows) {
+        $bad = @($findings | Where-Object { $_.Key -like 'FanStopped|*' -and $_.Title -like "*$($fr.Name)" }).Count -gt 0
+        $status = if ($bad) { Get-SevBadge 'warning' } else { '<span class="badge good">&#10004; OK</span>' }
+        A ('<tr><td>Fan: {0}</td><td class="num">{1:0} RPM</td><td class="num">{2:0} RPM</td><td>{3}</td><td>{4}</td></tr>' -f (Esc $fr.Name), $fr.Stat.Avg, $fr.Stat.Max, (Esc $fr.Stat.MaxAt.ToString('ddd HH:mm:ss')), $status)
     }
     A '</table></div>'
     if ($psuNote) { A "<div class=""note"">$(Esc $psuNote)</div>" }
