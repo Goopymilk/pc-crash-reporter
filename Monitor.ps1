@@ -143,12 +143,24 @@ function Add-BasicReadings($Out) {
     }
 }
 
+function Add-IdleReading($Out) {
+    # Seconds since the user last touched keyboard/mouse, written by IdleHelper.ps1 (only if fresh)
+    try {
+        $f = Join-Path $script:Paths.Logs 'idle.txt'
+        if (-not (Test-Path $f)) { return }
+        $parts = ([IO.File]::ReadAllText($f)).Trim() -split ','
+        $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [int64]$parts[0]
+        if ($age -ge 0 -and $age -le 90) { $Out['User~Session|Idle|Seconds Since Input'] = [double]$parts[1] + $age }
+    } catch { }
+}
+
 function Get-Readings {
     $out = [ordered]@{}
     if ($script:Computer) {
         foreach ($hw in $script:Computer.Hardware) { Add-HardwareReadings $hw $out }
     }
     Add-BasicReadings $out
+    Add-IdleReading $out
     return $out
 }
 
@@ -156,6 +168,20 @@ function Get-Readings {
 $script:LastProc = @{}
 $script:LastProcTime = $null
 $script:Cores = [Environment]::ProcessorCount
+
+function Get-GpuProcessUse($Procs) {
+    # Top 3 processes by graphics card 3D usage (Windows "GPU Engine" counters)
+    try {
+        $samples = (Get-Counter '\GPU Engine(*engtype_3D)\Utilization Percentage' -ErrorAction Stop).CounterSamples
+        $byPid = @{}
+        foreach ($s in $samples) { if ($s.InstanceName -match '^pid_(\d+)_') { $id = [int]$matches[1]; $byPid[$id] = [double]$byPid[$id] + $s.CookedValue } }
+        $names = @{}; foreach ($p in $Procs) { $names[$p.Id] = $p.ProcessName }
+        $byName = @{}
+        foreach ($kv in $byPid.GetEnumerator()) { $n = if ($names.ContainsKey($kv.Key)) { $names[$kv.Key] } else { "pid $($kv.Key)" }; $byName[$n] = [double]$byName[$n] + $kv.Value }
+        return @($byName.GetEnumerator() | Where-Object { $_.Value -ge 1 } | Sort-Object Value -Descending | Select-Object -First 3 |
+            ForEach-Object { [pscustomobject]@{ n = $_.Key; v = [math]::Round([math]::Min(100, $_.Value), 1) } })
+    } catch { return @() }
+}
 
 function Get-ProcessSnapshot {
     $now = Get-Date
@@ -181,10 +207,14 @@ function Get-ProcessSnapshot {
     if ($first) { return $null }
     $mem = $procs | Sort-Object WorkingSet64 -Descending | Select-Object -First 5 |
         ForEach-Object { [pscustomobject]@{ n = $_.ProcessName; v = [math]::Round($_.WorkingSet64 / 1MB) } }
+    $names = @($procs | ForEach-Object { $_.ProcessName } | Select-Object -Unique)
+    $apps = @(Get-SideAppMatches $names | ForEach-Object { $_.Name })
     return [pscustomobject]@{
-        t   = $now.ToString('o')
-        cpu = @($cpuList | Sort-Object v -Descending | Select-Object -First 5)
-        mem = @($mem)
+        t    = $now.ToString('o')
+        cpu  = @($cpuList | Sort-Object v -Descending | Select-Object -First 5)
+        mem  = @($mem)
+        gpu  = @(Get-GpuProcessUse $procs)
+        apps = $apps
     }
 }
 
@@ -235,7 +265,7 @@ function Write-ProcessSnapshot($Snap) {
 }
 
 # ---------- main ----------
-Initialize-Lhm
+if ($cfg.UseHardwareSensors -ne $false) { Initialize-Lhm } else { $script:SensorSource = 'windows-basic (hardware sensors off in settings)' }
 
 if ($Once) {
     $r = Get-Readings

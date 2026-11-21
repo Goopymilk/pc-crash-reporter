@@ -14,6 +14,7 @@ $script:Paths = [ordered]@{
     Data       = Join-Path $script:Root 'data'
     History    = Join-Path $script:Root 'data\history.csv'
     State      = Join-Path $script:Root 'data\state.json'
+    Paused     = Join-Path $script:Root 'data\paused.json'
     Tools      = Join-Path $script:Root 'tools'
     Lhm        = Join-Path $script:Root 'tools\LibreHardwareMonitor'
     Symbols    = Join-Path $script:Root 'tools\symbols'
@@ -46,6 +47,7 @@ function Get-DefaultConfig {
         OpenReportOnlyIfProblems = $false
         PsuWatts                = 0
         UseDebuggerIfInstalled  = $true
+        UseHardwareSensors      = $true
         Thresholds = [ordered]@{
             CpuTempWarn     = 90
             CpuTempCrit     = 97
@@ -55,6 +57,8 @@ function Get-DefaultConfig {
             GpuHotspotCrit  = 108
             DriveTempWarn   = 65
             DriveTempCrit   = 75
+            VrmTempWarn     = 100
+            VrmTempCrit     = 110
             RamLoadWarn     = 90
             PsuLoadWarnPct  = 80
         }
@@ -114,4 +118,26 @@ function Get-EventDataMap($Event) {
         }
     } catch { }
     return $map
+}
+
+# Background apps that hook into games or talk to hardware at a low level (process-name regex, friendly name, type)
+$script:SideApps = @(
+    @('^Discord$', 'Discord (in-game overlay)', 'overlay'), @('^RTSS$|RTSSHooksLoader', 'RivaTuner Statistics Server (on-screen display)', 'overlay'),
+    @('^MSIAfterburner$', 'MSI Afterburner', 'tuning'), @('^Overwolf', 'Overwolf', 'overlay'), @('^NVIDIA Overlay$|^nvcontainer$', 'NVIDIA overlay / app', 'overlay'),
+    @('^GameBar$|^GameBarFTServer$', 'Xbox Game Bar', 'overlay'), @('^gameoverlayui', 'Steam overlay', 'overlay'), @('^EpicOverlay|^EOSOverlayRenderer', 'Epic Games overlay', 'overlay'),
+    @('^RadeonSoftware$|^AMDRSServ$', 'AMD Radeon Software (overlay / tuning)', 'tuning'), @('^iCUE$|^Corsair\.Service', 'Corsair iCUE', 'rgb'),
+    @('^ArmouryCrate|^AsusCertService|^LightingService$', 'ASUS Armoury Crate', 'rgb'), @('^SignalRgb', 'SignalRGB', 'rgb'), @('^OpenRGB$', 'OpenRGB', 'rgb'),
+    @('^NZXT CAM$|^CAM$', 'NZXT CAM', 'rgb'), @('^wallpaper(32|64)$', 'Wallpaper Engine', 'overlay'), @('^HWiNFO(32|64)?$', 'HWiNFO', 'monitoring'),
+    @('^lghub|^LGHUB', 'Logitech G HUB', 'rgb'), @('^Razer Synapse|^RazerCentral', 'Razer Synapse', 'rgb'), @('^MSI\.CentralServer|^MSI Center|^MSI_Central', 'MSI Center', 'rgb'),
+    @('^GCC$|GigabyteControlCenter|^RGBFusion|^GBT', 'Gigabyte Control Center / RGB Fusion', 'rgb'), @('^AIDA64$', 'AIDA64', 'monitoring'),
+    @('^EVGAPrecision|^PrecisionX', 'EVGA Precision', 'tuning'), @('^ThunderMaster', 'Thermaltake software', 'rgb'), @('^Lian.?Li|^L-Connect', 'Lian Li L-Connect', 'rgb'),
+    @('^Medal$', 'Medal.tv (clip recording)', 'overlay'), @('^obs64$', 'OBS (recording)', 'overlay'), @('^Ryzen ?Master|^AMDRyzenMaster', 'AMD Ryzen Master', 'tuning'),
+    @('^XTU|^XtuService', 'Intel Extreme Tuning Utility', 'tuning'), @('^FanControl$', 'Fan Control', 'monitoring'), @('^SteelSeriesGG|^SteelSeriesEngine', 'SteelSeries GG', 'rgb')
+)
+function Get-SideAppMatches([string[]]$ProcessNames) {
+    $out = @()
+    foreach ($a in $script:SideApps) {
+        if (@($ProcessNames | Where-Object { $_ -match $a[0] }).Count) { $out += [pscustomobject]@{ Name = $a[1]; Type = $a[2] } }
+    }
+    return $out
 }

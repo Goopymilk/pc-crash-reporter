@@ -152,6 +152,18 @@ foreach ($t in @(@('PC Crash Reporter - Make Report Now', '-Force', 'Rebuilds th
 }
 Write-Host '  On-demand report tasks created.' -ForegroundColor Green
 
+# Idle helper: runs hidden in your session and notes how long since you last used the mouse/keyboard,
+# so the report can spot programs that work hard only while you are away (e.g. hidden crypto miners).
+$idleAction = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\wscript.exe" -Argument "`"$(Join-Path $script:Root 'lib\RunHidden.vbs')`" `"$(Join-Path $script:Root 'IdleHelper.ps1')`"" -WorkingDirectory $script:Root
+$idleTrigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+$idlePrincipal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+$idleSettings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'PC Crash Reporter - Idle Helper' -Action $idleAction -Trigger $idleTrigger -Principal $idlePrincipal `
+    -Settings $idleSettings -Description 'Notes how long since you last used the keyboard/mouse (for the "busy while idle" check).' -Force | Out-Null
+Write-Host '  Idle helper task created.' -ForegroundColor Green
+# a fresh install always means monitoring is on
+Remove-Item $script:Paths.Paused -Force -ErrorAction SilentlyContinue
+
 # ---------- 5. crash dumps ----------
 Write-Step 'Checking that Windows saves crash dumps'
 $cc = 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl'
@@ -183,6 +195,7 @@ Write-Host '  Done.' -ForegroundColor Green
 Write-Step 'Starting the monitor and building your first report'
 Stop-MonitorProcess
 Start-ScheduledTask -TaskName 'PC Crash Reporter - Monitor'
+Start-ScheduledTask -TaskName 'PC Crash Reporter - Idle Helper' -ErrorAction SilentlyContinue
 & (Join-Path $script:Root 'Report.ps1') -Force
 
 Write-Host ''

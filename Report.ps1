@@ -14,6 +14,7 @@ $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'lib\Common.ps1')
 . (Join-Path $PSScriptRoot 'lib\Knowledge.ps1')
 . (Join-Path $PSScriptRoot 'lib\DumpParser.ps1')
+. (Join-Path $PSScriptRoot 'lib\Checks.ps1')
 
 $cfg = Get-Config
 if ($Demo) { $CurrentSession = [switch]$true }
@@ -157,12 +158,6 @@ if ($ev1074) {
 
 # ------------------------------------------------------------------ findings from events
 $findings = New-Object System.Collections.Generic.List[object]
-function Add-Finding {
-    param([string]$Sev, [string]$Title, [string]$Plain, [object[]]$Steps = @(), [int]$Count = 1,
-          $First = $null, $Last = $null, [string]$Detail = '', [string]$Key = '', [string]$Area = 'Windows')
-    $script:findings.Add([pscustomobject]@{ Sev = $Sev; Title = $Title; Plain = $Plain; Steps = @($Steps); Count = $Count
-        First = $First; Last = $Last; Detail = $Detail; Key = $Key; Area = $Area; SeenBefore = 0 })
-}
 
 $noise = @{}
 $otherWarnings = 0
@@ -311,31 +306,7 @@ foreach ($key in @($series.Keys)) {
 }
 $hasSensors = $series.Count -gt 0
 
-function Find-SensorKey([string]$HwPattern, [string]$Type, [string[]]$Names, [string]$Exclude = '') {
-    $cands = @($series.Keys | Where-Object {
-        $p = $_ -split '\|'
-        $p.Count -ge 3 -and $p[0] -match $HwPattern -and $p[1] -eq $Type -and $series[$_].V.Count -gt 0 -and (-not $Exclude -or $_ -notmatch $Exclude)
-    } | Sort-Object)
-    foreach ($n in $Names) {
-        if ($n -eq '*') { if ($cands.Count) { return $cands[0] } else { return $null } }
-        $m = $cands | Where-Object { ($_ -split '\|')[2] -eq $n } | Select-Object -First 1
-        if ($m) { return $m }
-    }
-    return $null
-}
 
-function Get-Stats([string]$Key) {
-    if (-not $Key -or -not $series.ContainsKey($Key)) { return $null }
-    $s = $series[$Key]; $n = $s.V.Count
-    if ($n -eq 0) { return $null }
-    $max = [double]::MinValue; $maxAt = $null; $sum = 0.0
-    for ($i = 0; $i -lt $n; $i++) { $v = $s.V[$i]; $sum += $v; if ($v -gt $max) { $max = $v; $maxAt = $s.T[$i] } }
-    if ($Key -like '*|Power|*' -and $max -le 0) { return $null }   # 0 W = sensor not readable
-    $lastT = $s.T[$n - 1]
-    $endMax = [double]::MinValue
-    for ($i = $n - 1; $i -ge 0 -and $s.T[$i] -ge $lastT.AddSeconds(-60); $i--) { if ($s.V[$i] -gt $endMax) { $endMax = $s.V[$i] } }
-    return [pscustomobject]@{ Key = $Key; Avg = $sum / $n; Max = $max; MaxAt = $maxAt; Last = $s.V[$n - 1]; LastT = $lastT; EndMax = $endMax; Count = $n }
-}
 
 $SensorKey = [ordered]@{
     CpuTemp  = Find-SensorKey '^Cpu~' 'Temperature' @('Core (Tctl/Tdie)', 'CPU Package', 'Package', 'Tctl', 'Core Max', 'CPU Core', '*')
@@ -353,16 +324,6 @@ $Stat = @{}
 foreach ($k in $SensorKey.Keys) { $Stat[$k] = Get-Stats $SensorKey[$k] }
 
 # sensor-based findings
-function Test-TempFinding($St, [string]$What, [double]$Warn, [double]$Crit, [string[]]$Steps) {
-    if (-not $St) { return }
-    $t = '{0:0} C' -f $St.Max
-    $when = $St.MaxAt.ToString('HH:mm')
-    if ($St.Max -ge $Crit) {
-        Add-Finding -Sev 'critical' -Title "$What got dangerously hot ($t)" -Plain "$What reached $t at $when. Above $Crit C, parts slow themselves down or the PC may shut off to protect itself." -Steps $Steps -Key "Temp|$What" -Area 'Temperatures'
-    } elseif ($St.Max -ge $Warn) {
-        Add-Finding -Sev 'warning' -Title "$What ran hot ($t)" -Plain "$What peaked at $t at $when. That is within its limits but on the high side - better cooling helps stability and lifespan." -Steps $Steps -Key "Temp|$What" -Area 'Temperatures'
-    }
-}
 if ($hasSensors) {
     if (-not $cpuTempRough) { Test-TempFinding $Stat.CpuTemp 'The CPU' $Th.CpuTempWarn $Th.CpuTempCrit @('Cooling', 'CpuOc') }
     Test-TempFinding $Stat.GpuTemp 'The graphics card' $Th.GpuTempWarn $Th.GpuTempCrit @('GpuTemps', 'Cooling', 'GpuOc')
@@ -433,7 +394,7 @@ try {
             Name = $pd.FriendlyName; Type = [string]$pd.MediaType; Bus = [string]$pd.BusType; SizeGB = [math]::Round($pd.Size / 1GB)
             Health = [string]$pd.HealthStatus; Status = (@($pd.OperationalStatus) -join ', ')
             Temp = $(if ($rc) { $rc.Temperature }); TempMax = $(if ($rc) { $rc.TemperatureMax }); Wear = $(if ($rc) { $rc.Wear })
-            ReadErr = $(if ($rc) { $rc.ReadErrorsUncorrected }); Hours = $(if ($rc) { $rc.PowerOnHours })
+            ReadErr = $(if ($rc) { $rc.ReadErrorsUncorrected }); Hours = $(if ($rc) { $rc.PowerOnHours }); Firmware = "$($pd.FirmwareVersion)".Trim()
         }
     }
 } catch { }
@@ -538,11 +499,6 @@ if ($hasSensors -and (-not $SensorKey.CpuTemp -or $cpuTempRough)) {
 }
 
 # ------------------------------------------------------------------ fans that stopped while hot
-function Get-TimeMap([string]$Key) {
-    $map = @{}
-    if ($Key -and $series.ContainsKey($Key)) { $s = $series[$Key]; for ($i = 0; $i -lt $s.V.Count; $i++) { $map[$s.T[$i]] = $s.V[$i] } }
-    return $map
-}
 $fanRows = @()
 if ($hasSensors) {
     $cpuMap = Get-TimeMap $SensorKey.CpuTemp
@@ -669,13 +625,92 @@ if ($kind -eq 'bsod') {
 }
 
 # ------------------------------------------------------------------ history / error index
-$historyCols = 'SessionStart', 'SessionEnd', 'Outcome', 'StopCode', 'StopName', 'Driver', 'Verdict', 'Report'
+$historyCols = @('SessionStart', 'SessionEnd', 'Outcome', 'StopCode', 'StopName', 'Driver', 'Verdict', 'Report') + $script:HistoryExtraCols
 $history = @()
 if (Test-Path $script:Paths.History) { $history = @(Import-Csv $script:Paths.History) }
 $sessionKey = $prevBoot.ToString('yyyy-MM-ddTHH:mm:ss')
 $history = @($history | Where-Object { $_.SessionStart -ne $sessionKey })
 $recent = @($history | Where-Object { try { [datetime]::Parse($_.SessionStart, $inv) -ge $now.AddDays(-30) } catch { $false } })
 $prevBad = @($recent | Where-Object { $_.Outcome -in 'bsod', 'powerloss', 'powerbutton', 'sleepfail' })
+
+# ------------------------------------------------------------------ extra detections (lib\Checks.ps1)
+$appCrashCount = @($appCrash).Count + @($appHang).Count
+$gpuHangCount = @($lke | Where-Object { $_.Message -match '(?m)P1:\s*(141|117|1a8)\b' }).Count + @($allSys | Where-Object { ($_.ProviderName -eq 'Display' -and $_.Id -eq 4101) -or $_.ProviderName -match '^(nvlddmkm|amdkmdag|amdwddmg)$' }).Count
+$lastSampleAny = $null
+foreach ($sk in @($SensorKey.Values)) { if ($sk -and $series.ContainsKey($sk) -and $series[$sk].T.Count) { $lt = $series[$sk].T[$series[$sk].T.Count - 1]; if (-not $lastSampleAny -or $lt -gt $lastSampleAny) { $lastSampleAny = $lt } } }
+$snapshots = @()
+foreach ($stampFile in @($sensorFiles | ForEach-Object { $_.File.BaseName -replace '^sensors_', '' -replace '_part\d+$', '' } | Select-Object -Unique)) {
+    $pf = Join-Path $script:Paths.Sensors "processes_$stampFile.jsonl"
+    if (Test-Path $pf) { foreach ($ln in (Get-Content $pf -ErrorAction SilentlyContinue)) { try { $snapshots += ($ln | ConvertFrom-Json) } catch { } } }
+}
+$cpuName = "$($sys['Processor'])"
+if ($hasSensors) {
+    Invoke-VrmTempCheck
+    Invoke-PsuCheck
+    Invoke-GpuCableCheck
+    Invoke-GpuDropoutCheck
+    Invoke-CommitCheck
+    Invoke-IdleLoadCheck $snapshots
+    Invoke-CpuVoltageCheck $cpuName
+}
+$tempProfile = if ($hasSensors) { Get-TempProfile } else { $null }
+Invoke-TempHistoryCheck $tempProfile $history $now
+try { $slotCount = [int](Get-CimInstance Win32_PhysicalMemoryArray -ErrorAction Stop | Measure-Object MemoryDevices -Sum).Sum } catch { $slotCount = 0 }
+Invoke-RamSlotCheck $mods $slotCount
+# drives: SMART + firmware, compared with what was seen last time
+$driveStatePath = Join-Path $script:Paths.Data 'drive-state.json'
+$driveState = @{ Firmware = @{}; Crc = @{} }
+if (Test-Path $driveStatePath) { try { $js = Get-Content $driveStatePath -Raw | ConvertFrom-Json; foreach ($sec in 'Firmware', 'Crc') { if ($js.$sec) { foreach ($pp in $js.$sec.PSObject.Properties) { $driveState[$sec][$pp.Name] = $pp.Value } } } } catch { } }
+$smart = @(Get-SmartDrives)
+Invoke-SmartCheck $smart $driveState.Crc
+$driveTrouble = @($findings | Where-Object { ($_.Area -eq 'Drives' -and $_.Sev -ne 'info') -or $_.Key -match '^(disk|stornvme|storahci|Ntfs|Microsoft-Windows-Ntfs|volmgr)\|' }).Count -gt 0
+Invoke-FirmwareCheck @($drives | ForEach-Object { [pscustomobject]@{ Name = $_.Name; Firmware = $_.Firmware; Media = $_.Type } }) $driveState.Firmware $driveTrouble
+if (-not $Demo) {
+    $newState = @{ Firmware = @{}; Crc = @{} }
+    foreach ($d in $drives) { if ($d.Firmware) { $newState.Firmware[$d.Name] = $d.Firmware } }
+    foreach ($d in $smart) { if ($d.Attributes.ContainsKey(199)) { $newState.Crc[$d.Name] = [string]$d.Attributes[199] } }
+    try { $newState | ConvertTo-Json | Set-Content $driveStatePath -Encoding UTF8 } catch { }
+}
+# PCI Express errors: replace the generic WHEA entry with one that names the device
+$pcieEv = @($allSys | Where-Object { $_.ProviderName -eq 'Microsoft-Windows-WHEA-Logger' -and "$($_.Message)" -match 'PCI Express|PCIe' })
+if ($pcieEv.Count) {
+    Invoke-WheaPcieCheck $pcieEv
+    foreach ($id in @($pcieEv | ForEach-Object { $_.Id } | Select-Object -Unique)) {
+        $allOfId = @($allSys | Where-Object { $_.ProviderName -eq 'Microsoft-Windows-WHEA-Logger' -and $_.Id -eq $id })
+        if ($allOfId.Count -eq @($pcieEv | Where-Object { $_.Id -eq $id }).Count) { foreach ($gf in @($findings | Where-Object { $_.Key -eq "Microsoft-Windows-WHEA-Logger|$id" })) { [void]$findings.Remove($gf) } }
+    }
+}
+Invoke-UsbCheck $allSys $endTime
+$clockEv = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-General'; Id = 1; StartTime = $prevBoot } -ErrorAction SilentlyContinue)
+Invoke-CmosBatteryCheck $clockEv
+Invoke-MicrocodeCheck $cpuName (Get-MicrocodeRevision)
+if ($lastProcs) { Invoke-SideAppsCheck @($lastProcs.apps) @($lastProcs.gpu) $appCrashCount }
+Invoke-PageFileCheck (Get-PageFileInfo)
+Invoke-FreeSpaceCheck (Get-VolumeSpace)
+$wakeEv = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Power-Troubleshooter'; Id = 1; StartTime = $prevBoot } -ErrorAction SilentlyContinue)
+Invoke-WakeCheck $wakeEv $endTime $prevBoot (Get-FastStartupEnabled)
+Invoke-VbsCheck (Get-VbsInfo) $appCrashCount
+$pausedInfo = $null; if (Test-Path $script:Paths.Paused) { try { $pausedInfo = Get-Content $script:Paths.Paused -Raw | ConvertFrom-Json } catch { } }
+$monitorMode = Get-MonitorMode "$sensorSource" $pausedInfo $hasSensors
+Invoke-MonitorStatusCheck $monitorMode $pausedInfo
+$restartInfo = Get-RestartReason @($ev1074)
+Invoke-NotACrashCheck $restartInfo
+$pressTime = $endTime
+try { if ($d41['PowerButtonTimestamp'] -and [int64]$d41['PowerButtonTimestamp'] -gt 0) { $pressTime = [datetime]::FromFileTime([int64]$d41['PowerButtonTimestamp']) } } catch { }
+Invoke-DisplayOnlyCheck $lastSampleAny $pressTime $gpuHangCount
+Invoke-WallPowerCheck $hasSensors
+# this session's row for the history file (also used to look for patterns)
+$extra = [ordered]@{
+    Game = (Get-MainProgram $lastProcs)
+    GpuPowerEnd = $(if ($Stat.GpuPower) { [math]::Round($Stat.GpuPower.EndMax) } else { '' })
+    CpuTempMax = $(if ($Stat.CpuTemp -and -not $cpuTempRough) { [math]::Round($Stat.CpuTemp.EndMax) } else { '' })
+    GpuTempMax = $(if ($Stat.GpuTemp) { [math]::Round($Stat.GpuTemp.EndMax) } else { '' })
+    AfterWake = [string](@($findings | Where-Object { $_.Key -eq 'CrashAfterWake' }).Count -gt 0)
+    MonitorMode = $monitorMode
+}
+foreach ($pn in 'CpuLoadTemp', 'CpuLoadN', 'CpuIdleTemp', 'CpuIdleN', 'GpuLoadTemp', 'GpuLoadN', 'GpuIdleTemp', 'GpuIdleN') { $extra[$pn] = $(if ($tempProfile) { $tempProfile.$pn } else { '' }) }
+$thisRow = [pscustomobject](@{ SessionStart = $prevBoot.ToString('yyyy-MM-ddTHH:mm:ss'); Outcome = $kind; StopCode = $(if ($crash) { $crash.Info.Code } else { '' }); StopName = $(if ($crash) { $crash.Info.Name } else { '' }); Driver = $(if ($crash) { $crash.Driver } else { '' }) } + $extra)
+if ($kind -in 'bsod', 'powerloss', 'powerbutton', 'sleepfail', 'running') { Invoke-PatternCheck @(@($history) + $thisRow) $now }
 
 $indexPath = Join-Path $script:Paths.Data 'error-index.csv'
 $errIndex = @()
@@ -752,7 +787,9 @@ switch ($kind) {
         $start.Add('As a workaround, turn off Fast Startup: Control Panel -> Power Options -> "Choose what the power buttons do" -> untick "Turn on fast startup".')
     }
     'clean' {
-        $headline = 'Your PC shut down normally'
+        $headline = 'This was not a crash - your PC shut down normally'
+        if ($restartInfo -and $restartInfo.Who -eq 'update') { $headline = 'This was not a crash - Windows restarted to install updates' }
+        elseif ($restartInfo -and $restartInfo.Who -eq 'app') { $headline = "This was not a crash - a program ($($restartInfo.Process)) restarted the PC" }
         $how = 'Windows shut down / restarted the normal way.'
         if ($cleanInfo) {
             $who = $cleanInfo.Process
@@ -780,7 +817,7 @@ if ($gap -and $gap.TotalSeconds -ge 0 -and $gap.TotalMinutes -lt 30) {
     $story += "The sensor monitor's last reading was <b>$(Format-Span $gap)</b> before the PC went down, so the ""Right before it ended"" readings below show what the PC was doing at that moment."
 }
 if ($nCrit -gt 0) { $verdict = 'bad' } elseif ($nWarn -gt 0 -and $verdict -eq 'good') { $verdict = 'warn' }
-if ($kind -eq 'clean' -and $verdict -ne 'good') { $headline = 'Your PC shut down normally, but some problems were found' }
+if ($kind -eq 'clean' -and $verdict -ne 'good') { $headline += ' (but some problems were found)' }
 
 if ($endedAtCrash) {
     $prio = @{ 'Driver installed/updated' = 0; 'Driver (Windows Update)' = 0; 'Windows update' = 1 }
@@ -797,6 +834,12 @@ if ($prevBad.Count -ge 1 -and $endedAtCrash) {
     if ($crash -and ($codes | Where-Object { $_.Name -eq $crash.Info.Code })) {
         $start.Insert(0, "This same blue screen ($($crash.Info.Name)) has happened before in the last 30 days - that is a strong pattern, so focus on the steps for it.")
     }
+}
+$patternF = $findings | Where-Object { $_.Key -eq 'Patterns' } | Select-Object -First 1
+if ($patternF) { $ps = @(Resolve-Steps $patternF.Steps); for ($pi = $ps.Count - 1; $pi -ge 0; $pi--) { $start.Insert(0, $ps[$pi]) }; $start.Insert(0, 'Your crashes have a pattern (see "Patterns found across your recent crashes" below) - start there: ' + ($patternF.Plain -replace '^Looking at all crashes in the last 60 days together: ', '' -replace ' Patterns like these.*$', '')) }
+if ($findings | Where-Object { $_.Key -eq 'WallPower' }) {
+    [void]$start.Remove('Did the power flicker, or did someone bump the power cable or switch? If so, this one may not be a PC problem. If it keeps happening, carry on with the steps below.')
+    $start.Insert(0, 'Check the wall power first - nothing inside the PC looked wrong before it shut off. Did lights or other devices flicker at the same moment? Plug the PC straight into a wall socket (no power strip or extension cord), keep heaters/kettles off that socket, and if you have a UPS, test without it. See "Nothing inside the PC explains this shutoff" below.')
 }
 $startList = @($start | Select-Object -Unique | Select-Object -First 7)
 $crashCount30 = $prevBad.Count + [int]$endedAtCrash
@@ -1113,12 +1156,12 @@ if (-not $hasSensors) {
 
 # drives
 if ($drives.Count) {
-    A '<h2>Drive health</h2><section class="card"><div class="tablewrap"><table><tr><th>Drive</th><th>Type</th><th class="num">Size</th><th>Windows says</th><th class="num">Temp now</th><th class="num">Wear</th></tr>'
+    A '<h2>Drive health</h2><section class="card"><div class="tablewrap"><table><tr><th>Drive</th><th>Type</th><th class="num">Size</th><th>Windows says</th><th class="num">Temp now</th><th class="num">Wear</th><th>Firmware</th></tr>'
     foreach ($d in $drives) {
         $hs = if ($d.Health -eq 'Healthy') { '<span class="badge good">&#10004; Healthy</span>' } else { "<span class=""badge crit"">&#10006; $(Esc $d.Health)</span>" }
         $tmp = if ($d.Temp) { "$($d.Temp) C" } else { '-' }
         $wr = if ($null -ne $d.Wear -and "$($d.Wear)" -ne '') { "$($d.Wear)%" } else { '-' }
-        A "<tr><td>$(Esc $d.Name)</td><td>$(Esc "$($d.Type) / $($d.Bus)")</td><td class=""num"">$($d.SizeGB) GB</td><td>$hs</td><td class=""num"">$tmp</td><td class=""num"">$wr</td></tr>"
+        A "<tr><td>$(Esc $d.Name)</td><td>$(Esc "$($d.Type) / $($d.Bus)")</td><td class=""num"">$($d.SizeGB) GB</td><td>$hs</td><td class=""num"">$tmp</td><td class=""num"">$wr</td><td>$(Esc $d.Firmware)</td></tr>"
     }
     A '</table></div><p class="meta">"Wear" is how much of the SSD''s rated write life has been used (0% = new).</p></section>'
 }
@@ -1195,6 +1238,7 @@ $row = [pscustomobject]@{
     StopCode = $(if ($crash) { $crash.Info.Code } else { '' }); StopName = $(if ($crash) { $crash.Info.Name } else { '' })
     Driver = $(if ($crash) { $crash.Driver } else { '' }); Verdict = $verdict; Report = $fileName
 }
+foreach ($xk in $extra.Keys) { $row | Add-Member -NotePropertyName $xk -NotePropertyValue $extra[$xk] }
 if ($prevKnown -and -not $CurrentSession) {
     @($history + $row) | Select-Object $historyCols | Export-Csv $script:Paths.History -NoTypeInformation -Encoding UTF8
     $newIdx = foreach ($f in $findings) { [pscustomobject]@{ SessionStart = $sessionKey; Severity = $f.Sev; Key = $f.Key; Title = $f.Title; Count = $f.Count; Last = $(if ($f.Last) { ([datetime]$f.Last).ToString('yyyy-MM-ddTHH:mm:ss') } else { '' }) } }

@@ -9,6 +9,8 @@
   "_PsuWatts_help": "Set this to your power supply's wattage (printed on its label, e.g. 650) to get warnings when your PC gets close to its limit. 0 = unknown.",
   "PsuWatts": 0,
   "UseDebuggerIfInstalled": true,
+  "_UseHardwareSensors_help": "true = read temperatures, power and fan speeds with LibreHardwareMonitor (recommended). false = only basic Windows readings (CPU/RAM load, NVIDIA GPU) - use this if the hardware sensor driver causes problems with anti-cheat or other software.",
+  "UseHardwareSensors": true,
   "Thresholds": {
     "CpuTempWarn": 90,
     "CpuTempCrit": 97,
@@ -18,6 +20,8 @@
     "GpuHotspotCrit": 108,
     "DriveTempWarn": 65,
     "DriveTempCrit": 75,
+    "VrmTempWarn": 100,
+    "VrmTempCrit": 110,
     "RamLoadWarn": 90,
     "PsuLoadWarnPct": 80
   }

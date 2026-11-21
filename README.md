@@ -15,6 +15,15 @@ A beginner-friendly crash detective for Windows. It keeps an eye on your PC in t
 - **Spots dead fans:** a fan that was spinning, then shows 0 RPM while its part is hot. Fans that never spin (nothing plugged in) and graphics cards that stop their fans when cool are ignored.
 - **Detects overclocks:** EXPO/XMP memory profiles, RAM running above or below the speed it's rated for, and CPUs going faster than their normal top speed. It knows the stock speeds of common Ryzen and Intel CPUs.
 - **Checks your setup,** for example mismatched RAM sticks, an old graphics driver, how old your BIOS is (with how to check for a newer one), drive health and SSD wear.
+- **Looks for common crash causes** and explains each one in plain English, with what to try next:
+  - *Power:* the PC shutting off at peak power draw, sagging 12V/5V/3.3V rails, daisy-chained GPU power cables, the graphics card "falling off" or its power dropping to zero, and wall-power advice (socket, power strip, UPS) when nothing inside the PC explains a shutoff.
+  - *Heat:* hot motherboard power circuits (VRMs), and temperatures creeping up compared with this PC's own readings from weeks ago (dust, old thermal paste, a loose cooler).
+  - *Hardware:* RAM in the wrong slots or sharing one channel, unsafe CPU voltages (including 13th/14th gen Intel and Ryzen SoC voltage), Intel 13th/14th gen microcode older than 0x12B, failing SATA drives (SMART), SSD firmware with the right update tool named, PCI Express errors with the device named, USB errors just before a crash, and a weak CMOS battery.
+  - *Windows:* running out of memory (commit charge), a page file that is off or too small, a nearly full drive, crashes right after waking from sleep, Fast Startup, and Memory Integrity / Hyper-V. Also overlays and RGB/tuning apps that were running, and programs working hard while nobody is using the PC (possible hidden miners).
+  - *Not really crashes:* says clearly when a restart was Windows Update, you, or an installer, and tells a frozen PC apart from a screen that only went black.
+  - *Patterns:* "4 of your last 5 crashes happened while X was running", "all with the graphics card above 270 W", the same stop code again and again, and so on.
+- **One-click Windows repair:** `Repair-Windows.cmd` runs DISM and SFC for you and saves a log.
+- **Pause anytime:** `Pause-Monitoring.cmd` / `Resume-Monitoring.cmd`, or set `UseHardwareSensors` to `false` if the sensor driver bothers a game's anti-cheat.
 
 ## Install (about 2 minutes)
 
@@ -48,7 +57,8 @@ Open it with Notepad. The most useful setting:
 
 - **`PsuWatts`**: your power supply's wattage (it's on the PSU's label). Set this and the report will warn you when your parts draw close to its limit.
 - `OpenReportOnlyIfProblems`: set to `true` if you only want the report to pop up when something is wrong.
-- `Thresholds`: the temperature warning levels in degrees C.
+- `UseHardwareSensors`: `false` turns off the detailed hardware sensors (LibreHardwareMonitor). Only basic Windows readings are kept.
+- `Thresholds`: the temperature warning levels in degrees C (including `VrmTempWarn`/`VrmTempCrit` for the motherboard power circuits).
 
 ## Files
 
@@ -62,6 +72,10 @@ Open it with Notepad. The most useful setting:
 | `reports\` | All reports (`latest.html` is always the newest) |
 | `data\history.csv`, `data\error-index.csv` | History of every session and every error found |
 | `tools\` | LibreHardwareMonitor (sensor library) and the symbol cache for WinDbg |
+
+## Testing
+
+Run `tests\Run-Tests.ps1` to check every detection against made-up sensor data and Windows events.
 
 ## Limits
 

@@ -13,7 +13,7 @@ if (-not (Test-IsAdmin)) {
     exit
 }
 
-$tasks = 'PC Crash Reporter - Monitor', 'PC Crash Reporter - Report', 'PC Crash Reporter - Make Report Now', 'PC Crash Reporter - Check Now'
+$tasks = 'PC Crash Reporter - Monitor', 'PC Crash Reporter - Report', 'PC Crash Reporter - Make Report Now', 'PC Crash Reporter - Check Now', 'PC Crash Reporter - Idle Helper'
 foreach ($t in $tasks) {
     if (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue) {
         Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
