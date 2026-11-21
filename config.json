@@ -1,0 +1,24 @@
+{
+  "_help": "Settings for PC Crash Reporter. Edit with Notepad, save, and the change applies after the next restart. Temperatures are in degrees C.",
+  "SampleIntervalSeconds": 5,
+  "ProcessSnapshotSeconds": 30,
+  "KeepSensorLogDays": 10,
+  "KeepReportsDays": 120,
+  "OpenReportAfterEveryBoot": true,
+  "OpenReportOnlyIfProblems": false,
+  "_PsuWatts_help": "Set this to your power supply's wattage (printed on its label, e.g. 650) to get warnings when your PC gets close to its limit. 0 = unknown.",
+  "PsuWatts": 0,
+  "UseDebuggerIfInstalled": true,
+  "Thresholds": {
+    "CpuTempWarn": 90,
+    "CpuTempCrit": 97,
+    "GpuTempWarn": 83,
+    "GpuTempCrit": 90,
+    "GpuHotspotWarn": 100,
+    "GpuHotspotCrit": 108,
+    "DriveTempWarn": 65,
+    "DriveTempCrit": 75,
+    "RamLoadWarn": 90,
+    "PsuLoadWarnPct": 80
+  }
+}

@@ -1,0 +1,7 @@
+# Personal data created when the tool runs - never commit
+logs/
+reports/
+data/
+
+# Downloaded by Install.ps1 (LibreHardwareMonitor, WinDbg symbol cache)
+tools/
